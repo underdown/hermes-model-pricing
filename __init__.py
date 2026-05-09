@@ -38,31 +38,26 @@ def _register_commands() -> None:
 
 
 def _fetch_pricing_impl(provider: str = "all", **_kw) -> str:
-    """Internal implementation — called by both the tool wrapper and command handler."""
-    from .pricing_module import FETCHERS, prices_as_table
+    """Internal implementation — calls _load_provider which uses 24h disk cache."""
+    from .pricing_module import _load_provider, prices_as_table
+
     provider = provider.strip().lower() or "all"
 
-    if provider not in FETCHERS and provider not in ("all", "minimax"):
+    if provider not in ("all", "deepseek", "openrouter", "nvidia", "groq",
+                         "fireworks", "together", "mistral", "cohere", "minimax"):
         return (
             f"Unknown provider: '{provider}'.\n"
-            f"Available providers: `{'`, `'.join(sorted(FETCHERS))}`, `all`."
+            f"Available providers: `deepseek`, `openrouter`, `nvidia`, `groq`, "
+            f"`fireworks`, `together`, `mistral`, `cohere`, `minimax`, `all`."
         )
 
     if provider == "all":
-        results = {}
-        for name, fn in FETCHERS.items():
-            try:
-                results[name] = fn()
-            except Exception as exc:
-                results[name] = [(name, f"FETCH_ERROR: {exc}", None, None, None, "")]
+        from .pricing_module import fetch_all as _fetch_all
+        results = _fetch_all()
         tables = [prices_as_table(name, models) for name, models in results.items()]
         return "\n\n".join(tables)
 
-    try:
-        models = FETCHERS[provider]()
-    except Exception as exc:
-        return f"Error fetching pricing for {provider}: {exc}"
-
+    models = _load_provider(provider)
     return prices_as_table(provider, models)
 
 
@@ -72,17 +67,19 @@ def _handle_pricing(args, **_kw) -> str:
 
 
 def _list_models_impl(provider: str = "openrouter", model_filter: str = "", **_kw) -> str:
-    """Internal implementation — called by both the tool wrapper and command handler."""
-    from .pricing_module import FETCHERS
+    """Internal implementation — calls _load_provider which uses 24h disk cache."""
+    from .pricing_module import _load_provider
+
     provider = provider.strip().lower() or "openrouter"
     model_filter = (model_filter or "").strip().lower()
 
-    fetcher = FETCHERS.get(provider)
-    if fetcher is None:
-        return f"Unknown provider '{provider}'. Try: `{'`, `'.join(sorted(FETCHERS))}`."
+    known = {"deepseek", "openrouter", "nvidia", "groq", "fireworks",
+             "together", "mistral", "cohere", "minimax"}
+    if provider not in known:
+        return f"Unknown provider '{provider}'. Try: `{'`, `'.join(sorted(known))}`."
 
     try:
-        models = fetcher()
+        models = _load_provider(provider)
     except Exception as exc:
         return f"Error listing models for {provider}: {exc}"
 
