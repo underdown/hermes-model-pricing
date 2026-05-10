@@ -445,6 +445,32 @@ def _load_provider(provider: str) -> list[ModelPrice]:
     return models
 
 
+def get_pricing_entry(provider: str, model_id: str) -> Optional[dict]:
+    """Look up cached pricing for a specific model from the 24h disk cache.
+
+    Returns a dict with input_cost, output_cost, cache_read_cost, cache_write_cost,
+    source_url, promo — or None if the provider/model isn't cached.
+
+    Intended for cross-plugin use (e.g. token-logger enriching cost data for
+    providers not covered by usage_pricing.py's hardcoded table).
+    """
+    try:
+        models = _load_provider(provider)
+    except Exception:
+        return None
+    for m in models:
+        if m.model_id == model_id:
+            return {
+                "input_cost": m.input_cost,
+                "output_cost": m.output_cost,
+                "cache_read_cost": m.cache_read_cost,
+                "cache_write_cost": m.cache_write_cost,
+                "source_url": m.source_url,
+                "promo": m.promo,
+            }
+    return None
+
+
 def fetch_all() -> dict[str, list[ModelPrice]]:
     results = {}
     for name in _PROVIDER_LIVE_FETCHERS:
