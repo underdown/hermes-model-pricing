@@ -5,18 +5,17 @@ List all available models from a provider's API, including capabilities and pric
 Usage:
   python list_models.py --provider nvidia
   python list_models.py --provider openrouter --search deepseek
-  python list_models.py --provider nvidia --search llama
-  python list_models.py --provider groq
-  python list_models.py --provider together
   python list_models.py --provider openrouter --sort price  # sort by cheapest input
+  python list_models.py --provider nvidia --search llama
 
 Providers:
-  nvidia      - NVIDIA NIM catalog (public /models endpoint, no pricing)
-  openrouter  - OpenRouter (full pricing + context length from models API)
-  deepseek    - DeepSeek (from pricing docs page)
-  groq        - Groq (hardcoded rates from public pricing page)
-  together    - Together AI (hardcoded rates from docs)
-  all         - All providers combined
+  nvidia     - NVIDIA NIM catalog (public /models endpoint, no pricing)
+  openrouter - OpenRouter (full pricing + context length from models API)
+  deepseek   - DeepSeek (from pricing docs page)
+  minimax    - MiniMax (models API)
+  All others require an API key and hit the provider's /models endpoint.
+
+Output: table of model_id, context_length, input/output pricing, owned_by
 """
 
 from __future__ import annotations
@@ -81,6 +80,8 @@ def fetch_deepseek() -> list[dict]:
     cells = [re.sub(r"<[^>]+>", "", td).strip() for td in td_pattern.findall(html)]
     cells = [c for c in cells if c]
 
+    # Model IDs at cells[1] (flash) and cells[2] (pro)
+    # Versions at cells[8] (flash) and cells[9] (pro)
     models = [
         {
             "id": cells[1].replace("(1)", ""),
@@ -88,7 +89,7 @@ def fetch_deepseek() -> list[dict]:
             "version": cells[8],
             "context_length": 1_000_000,
             "pricing": {
-                "input_per_million": 0.14,
+                "input_per_million": 0.14,      # cache miss
                 "output_per_million": 0.28,
                 "cache_hit_per_million": 0.0028,
             },
@@ -100,70 +101,14 @@ def fetch_deepseek() -> list[dict]:
             "version": cells[9],
             "context_length": 1_000_000,
             "pricing": {
-                "input_per_million": 0.435,
-                "output_per_million": 0.87,
-                "cache_hit_per_million": 0.003625,
+                "input_per_million": 0.435,     # cache miss (75% promo)
+                "output_per_million": 0.87,      # (75% promo)
+                "cache_hit_per_million": 0.003625,  # (75% promo)
             },
             "promo": "75% off until 2026-05-31",
         },
     ]
     return models
-
-
-def fetch_groq_models() -> list[dict]:
-    """Groq — hardcoded from groq.com/pricing (May 2026). No public models API."""
-    rates = {
-        "llama-3.1-8b-instruct":            {"input": 0.05, "output": 0.08, "ctx": 131072},
-        "llama-3.3-70b-versatile":          {"input": 0.59, "output": 0.79, "ctx": 131072},
-        "meta-llama/llama-4-scout-17b-16e-instruct": {"input": 0.11, "output": 0.34, "ctx": 131072},
-        "qwen/qwen3-32b":                   {"input": 0.29, "output": 0.59, "ctx": 131072},
-        "openai/gpt-oss-120b":              {"input": 0.15, "output": 0.60, "ctx": 131072, "cache": 0.0375},
-        "openai/gpt-oss-20b":               {"input": 0.075, "output": 0.30, "ctx": 131072, "cache": 0.0375},
-    }
-    return [
-        {
-            "id": k,
-            "owned_by": "groq",
-            "context_length": v["ctx"],
-            "pricing": {
-                "input_per_million": v["input"],
-                "output_per_million": v["output"],
-                "cache_hit_per_million": v.get("cache"),
-            },
-            "promo": "",
-        }
-        for k, v in rates.items()
-    ]
-
-
-def fetch_together_models() -> list[dict]:
-    """Together AI — hardcoded from docs.together.ai/docs/inference-models (May 2026)."""
-    rates = {
-        "deepseek-ai/DeepSeek-V4-Pro":           {"input": 2.10, "output": 4.40, "ctx": 512000},
-        "moonshotai/Kimi-K2.6":                   {"input": 1.20, "output": 4.50, "ctx": 262144},
-        "moonshotai/Kimi-K2.5":                   {"input": 0.50, "output": 2.80, "ctx": 262144},
-        "MiniMaxAI/MiniMax-M2.7":                 {"input": 0.30, "output": 1.20, "ctx": 202752, "cache": 0.06},
-        "Qwen/Qwen3.5-9B":                        {"input": 0.10, "output": 0.15, "ctx": 262144},
-        "Qwen/Qwen3.6-Plus":                       {"input": 0.50, "output": 3.00, "ctx": 1000000},
-        "openai/gpt-oss-120b":                     {"input": 0.15, "output": 0.60, "ctx": 128000},
-        "openai/gpt-oss-20b":                      {"input": 0.05, "output": 0.20, "ctx": 128000},
-        "meta-llama/Llama-3.3-70B-Instruct-Turbo": {"input": 0.88, "output": 0.88, "ctx": 131072},
-        "google/gemma-4-31B-it":                   {"input": 0.20, "output": 0.50, "ctx": 262144},
-    }
-    return [
-        {
-            "id": k,
-            "owned_by": "together",
-            "context_length": v["ctx"],
-            "pricing": {
-                "input_per_million": v["input"],
-                "output_per_million": v["output"],
-                "cache_hit_per_million": v.get("cache"),
-            },
-            "promo": "",
-        }
-        for k, v in rates.items()
-    ]
 
 
 def fetch_endpoint(base_url: str, api_key: str = "") -> list[dict]:
@@ -276,8 +221,7 @@ def display(models: list[dict], provider: str, sort_by: str = "default") -> None
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="List available models from a provider")
-    parser.add_argument("--provider", "-p", required=True,
-                        help="Provider: nvidia, openrouter, deepseek, groq, together")
+    parser.add_argument("--provider", "-p", required=True, help="Provider: nvidia, openrouter, deepseek")
     parser.add_argument("--search", "-s", help="Filter models containing this string (case-insensitive)")
     parser.add_argument("--sort", choices=["default", "price", "ctx"], default="default", help="Sort order")
     parser.add_argument("--base-url", help="Custom base URL for generic OpenAI-compatible endpoint")
@@ -293,15 +237,11 @@ def main() -> None:
             models = fetch_openrouter(search=args.search or "")
         elif provider == "deepseek":
             models = fetch_deepseek()
-        elif provider == "groq":
-            models = fetch_groq_models()
-        elif provider == "together":
-            models = fetch_together_models()
         elif args.base_url:
             models = fetch_endpoint(args.base_url, args.api_key or "")
         else:
             print(f"Unknown provider: {provider}")
-            print("Supported: nvidia, openrouter, deepseek, groq, together")
+            print("Supported: nvidia, openrouter, deepseek")
             print("For others, use --base-url with --api-key")
             sys.exit(1)
     except Exception as e:

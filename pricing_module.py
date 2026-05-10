@@ -423,7 +423,9 @@ def _load_provider(provider: str) -> list[ModelPrice]:
     if provider in cache:
         return [ModelPrice.from_dict(d) for d in cache[provider]]
 
-    fetcher = _PROVIDER_LIVE_FETCHERS.get(provider, _static_minimax)
+    fetcher = _PROVIDER_LIVE_FETCHERS.get(provider)
+    if fetcher is None:
+        return []
     try:
         models = fetcher()
     except Exception as exc:

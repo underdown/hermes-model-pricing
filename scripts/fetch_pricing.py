@@ -5,7 +5,8 @@ Fetch model pricing from each provider and compare against Hermes's hardcoded ra
 Usage:
   python fetch_pricing.py                        # All providers
   python fetch_pricing.py --provider deepseek    # DeepSeek only
-  python fetch_pricing.py --provider groq        # Groq only
+  python fetch_pricing.py --provider anthropic   # Anthropic only
+  python fetch_pricing.py --provider openai      # OpenAI only
   python fetch_pricing.py --provider all --diff  # All + diff vs usage_pricing.py
 
 Output:
@@ -14,16 +15,14 @@ Output:
   - Warnings if rates differ from what Hermes is using
 
 Data sources:
-  OpenRouter:  https://openrouter.ai/api/v1/models (open API, full pricing)
-  DeepSeek:    https://api-docs.deepseek.com/quick_start/pricing (public HTML)
-  NVIDIA NIM:  https://integrate.api.nvidia.com/v1/models (open, IDs only)
-  Groq:        https://groq.com/pricing (public HTML table)
-  Fireworks:   https://docs.fireworks.ai/serverless/pricing (public HTML)
-  Together AI: https://docs.together.ai/docs/inference-models (public HTML table)
-  Mistral:     https://mistral.ai/pricing (public HTML — React, may be fragile)
-  Cohere:      https://cohere.com/pricing (public HTML)
-  xAI:         No public pricing found
-  MiniMax:     pricing from https://platform.minimax.io/docs (or hardcoded)
+  DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing (public HTML)
+  Anthropic: https://platform.claude.com/docs/en/about-claude/pricing (public HTML)
+  OpenAI:    https://openai.com/api/pricing/ (public HTML)
+  Google:    https://ai.google.dev/pricing (public HTML)
+  NVIDIA:    https://integrate.api.nvidia.com/v1/models (open endpoint, model IDs only)
+  OpenRouter: https://openrouter.ai/api/v1/models (live API, pricing in response)
+  xAI:       https://docs.x.ai/docs/models (public docs page)
+  MiniMax:   /v1/models returns empty list; pricing from https://platform.minimax.io/docs
 """
 
 from __future__ import annotations
@@ -180,116 +179,9 @@ def fetch_nvidia_model_ids() -> list[ModelPrice]:
     return results
 
 
-# -------------------------------------------------------------------------
-# Additional provider fetchers
-# -------------------------------------------------------------------------
-
-def fetch_groq() -> list[ModelPrice]:
-    """Hardcoded Groq rates from groq.com/pricing (May 2026). API requires key."""
-    groq_rates = {
-        "llama-3.1-8b-instruct": (Decimal("0.05"), Decimal("0.08"), None, 131072),
-        "llama-3.3-70b-versatile": (Decimal("0.59"), Decimal("0.79"), None, 131072),
-        "meta-llama/llama-4-scout-17b-16e-instruct": (Decimal("0.11"), Decimal("0.34"), None, 131072),
-        "qwen/qwen3-32b": (Decimal("0.29"), Decimal("0.59"), None, 131072),
-        "openai/gpt-oss-120b": (Decimal("0.15"), Decimal("0.60"), Decimal("0.0375"), 131072),
-        "openai/gpt-oss-20b": (Decimal("0.075"), Decimal("0.30"), Decimal("0.0375"), 131072),
-        "openai/gpt-oss-safeguard-20b": (Decimal("0.075"), Decimal("0.30"), Decimal("0.0375"), 131072),
-    }
-    return [
-        ModelPrice(provider="groq", model_id=k,
-                   input_cost=Decimal(str(v[0])), output_cost=Decimal(str(v[1])),
-                   cache_read_cost=Decimal(str(v[2])) if v[2] else None,
-                   context_length=v[3], source_url="https://groq.com/pricing")
-        for k, v in groq_rates.items()
-    ]
-
-
-def fetch_fireworks() -> list[ModelPrice]:
-    """Hardcoded Fireworks AI rates from docs.fireworks.ai/serverless/pricing (May 2026)."""
-    rates = {
-        "deepseek-ai/DeepSeek-V4-Pro": (Decimal("1.74"), Decimal("3.48"), Decimal("0.145"), 512000),
-        "moonshotai/Kimi-K2.6":          (Decimal("0.95"), Decimal("4.00"), Decimal("0.16"), 262144),
-        "moonshotai/Kimi-K2.5":          (Decimal("0.60"), Decimal("3.00"), Decimal("0.10"), 262144),
-        "zai-org/GLM-5.1":              (Decimal("1.40"), Decimal("4.40"), Decimal("0.26"), 262144),
-        "MiniMaxAI/MiniMax-M2.7":        (Decimal("0.30"), Decimal("1.20"), Decimal("0.06"), 202752),
-        "Qwen/Qwen3-VL-30B-A3B":         (Decimal("0.15"), Decimal("0.60"), Decimal("0.075"), 131072),
-        "openai/gpt-oss-120b":           (Decimal("0.15"), Decimal("0.60"), Decimal("0.015"), 131072),
-        "openai/gpt-oss-20b":            (Decimal("0.07"), Decimal("0.30"), Decimal("0.035"), 131072),
-    }
-    return [
-        ModelPrice(provider="fireworks", model_id=k,
-                   input_cost=v[0], output_cost=v[1], cache_read_cost=v[2],
-                   context_length=v[3], source_url="https://docs.fireworks.ai/serverless/pricing")
-        for k, v in rates.items()
-    ]
-
-
-def fetch_together() -> list[ModelPrice]:
-    """Hardcoded Together AI rates from docs.together.ai/docs/inference-models (May 2026)."""
-    rates = {
-        "deepseek-ai/DeepSeek-V4-Pro":            (Decimal("2.10"), Decimal("4.40"), None,          512000),
-        "moonshotai/Kimi-K2.6":                    (Decimal("1.20"), Decimal("4.50"), None,          262144),
-        "moonshotai/Kimi-K2.5":                    (Decimal("0.50"), Decimal("2.80"), None,          262144),
-        "MiniMaxAI/MiniMax-M2.7":                  (Decimal("0.30"), Decimal("1.20"), Decimal("0.06"), 202752),
-        "Qwen/Qwen3.5-9B":                         (Decimal("0.10"), Decimal("0.15"), None,          262144),
-        "Qwen/Qwen3.6-Plus":                       (Decimal("0.50"), Decimal("3.00"), None,          1000000),
-        "openai/gpt-oss-120b":                     (Decimal("0.15"), Decimal("0.60"), None,          128000),
-        "openai/gpt-oss-20b":                      (Decimal("0.05"), Decimal("0.20"), None,          128000),
-        "meta-llama/Llama-3.3-70B-Instruct-Turbo": (Decimal("0.88"), Decimal("0.88"), None,          131072),
-        "google/gemma-4-31B-it":                   (Decimal("0.20"), Decimal("0.50"), None,          262144),
-        "Qwen/Qwen3.5-397B-A17B":                 (Decimal("0.60"), Decimal("3.60"), None,          262144),
-        "essentialai/rnj-1-instruct":              (Decimal("0.15"), Decimal("0.15"), None,          32768),
-        "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": (Decimal("2.00"), Decimal("2.00"), None,          256000),
-        "Qwen/Qwen3-235B-A22B-Instruct-2507-tput": (Decimal("0.20"), Decimal("0.60"), None,          262144),
-    }
-    return [
-        ModelPrice(provider="together", model_id=k,
-                   input_cost=v[0], output_cost=v[1], cache_read_cost=v[2],
-                   context_length=v[3], source_url="https://docs.together.ai/docs/inference-models")
-        for k, v in rates.items()
-    ]
-
-
-def fetch_mistral() -> list[ModelPrice]:
-    """Hardcoded Mistral rates from mistral.ai/pricing (May 2026). React-rendered page — hardcoded rates."""
-    rates = {
-        "mistral-small-latest":  (Decimal("0.10"), Decimal("0.30"), None, 131072),
-        "mistral-medium-latest": (Decimal("1.50"), Decimal("4.00"), None, 131072),
-        "mistral-large-latest":  (Decimal("2.00"), Decimal("8.00"), None, 131072),
-        "codestral-latest":      (Decimal("0.50"), Decimal("1.00"), None, 131072),
-        "mistral-small-2506":    (Decimal("0.10"), Decimal("0.30"), None, 131072),
-        "mistral-medium-2507":   (Decimal("1.50"), Decimal("4.00"), None, 131072),
-        "mistral-large-2506":    (Decimal("2.00"), Decimal("8.00"), None, 131072),
-    }
-    return [
-        ModelPrice(provider="mistral", model_id=k,
-                   input_cost=v[0], output_cost=v[1], cache_read_cost=v[2],
-                   context_length=v[3], source_url="https://mistral.ai/pricing")
-        for k, v in rates.items()
-    ]
-
-
-def fetch_cohere() -> list[ModelPrice]:
-    """Hardcoded Cohere rates from cohere.com/pricing (May 2026). API requires key."""
-    rates = {
-        "command-a-03-2025":       (Decimal("0.50"), Decimal("1.50"), None, 262144),
-        "command-a-08-2025":       (Decimal("0.50"), Decimal("1.50"), None, 262144),
-        "command-r-plus-08-2024":   (Decimal("2.50"), Decimal("10.00"), None, 131072),
-        "command-r-03-2024":       (Decimal("0.50"), Decimal("1.50"), None, 131072),
-        "aya-expanse-8b":          (Decimal("0.50"), Decimal("1.50"), None, 262144),
-        "aya-expanse-32b":         (Decimal("0.50"), Decimal("1.50"), None, 262144),
-    }
-    return [
-        ModelPrice(provider="cohere", model_id=k,
-                   input_cost=v[0], output_cost=v[1], cache_read_cost=v[2],
-                   context_length=v[3], source_url="https://cohere.com/pricing")
-        for k, v in rates.items()
-    ]
-
-
-# -------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Comparison: current rates vs what Hermes has hardcoded
-# -------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def load_hardcoded_pricing() -> dict[tuple[str, str], dict]:
     """Load the hardcoded OFFICIAL_DOCS_PRICING from agent/usage_pricing.py.
@@ -382,11 +274,6 @@ def main() -> None:
         "deepseek": fetch_deepseek,
         "openrouter": fetch_openrouter,
         "nvidia": fetch_nvidia_model_ids,
-        "groq": fetch_groq,
-        "fireworks": fetch_fireworks,
-        "together": fetch_together,
-        "mistral": fetch_mistral,
-        "cohere": fetch_cohere,
     }
 
     providers_to_fetch = list(fetchers.keys()) if args.provider == "all" else [args.provider]
