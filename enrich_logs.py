@@ -170,6 +170,19 @@ def _row_needs_enrichment(row: dict, recalculate: bool) -> bool:
     return False
 
 
+def _open_log_file(path: Path):
+    """Open a log CSV as text, transparently handling gzip.
+
+    Returns (text_wrapper, needs_recompress). The current day's log is a plain
+    .csv and only gets gzipped by the nightly archiver, so the enricher must
+    handle both forms or it silently skips today.
+    """
+    if path.name.endswith(".gz"):
+        raw = gzip.open(path, mode="rb")
+        return io.TextIOWrapper(raw, encoding="utf-8"), True
+    return open(path, mode="r", encoding="utf-8", newline=""), False
+
+
 def enrich_file(
     gz_path: Path,
     exact: dict[tuple[str, str], dict],
@@ -178,7 +191,7 @@ def enrich_file(
     recalculate: bool = False,
     dry_run: bool = False,
 ) -> dict:
-    """Enrich one CSV.gz file. Returns stats dict."""
+    """Enrich one log CSV (plain or gzipped). Returns stats dict."""
     stats = {
         "file": gz_path.name,
         "rows": 0,
@@ -188,15 +201,22 @@ def enrich_file(
         "skipped_read": False,
     }
 
+    wrapper = None
     try:
-        with gzip.open(gz_path, mode="rb") as raw:
-            reader = csv.DictReader(io.TextIOWrapper(raw, encoding="utf-8"))
-            headers = reader.fieldnames or []
-            rows = list(reader)
-    except (EOFError, OSError, gzip.BadGzipFile, Exception) as e:
+        wrapper, needs_recompress = _open_log_file(gz_path)
+        reader = csv.DictReader(wrapper)
+        headers = reader.fieldnames or []
+        rows = list(reader)
+    except (EOFError, OSError, gzip.BadGzipFile, UnicodeDecodeError, Exception) as e:
         print(f"  ⚠️  {gz_path.name}: could not read ({e})")
         stats["skipped_read"] = True
         return stats
+    finally:
+        if wrapper is not None:
+            try:
+                wrapper.close()
+            except Exception:
+                pass
 
     stats["rows"] = len(rows)
 
@@ -225,13 +245,26 @@ def enrich_file(
             stats["no_rate"] += 1
 
     if not dry_run and not stats["skipped_read"]:
-        backup = gz_path.with_suffix(".csv.gz.bak")
-        if not backup.exists():
-            import shutil
-            shutil.copy2(gz_path, backup)
-        with gzip.open(gz_path, mode="wb", compresslevel=6) as f_out:
-            with io.TextIOWrapper(f_out, encoding="utf-8") as wrapper:
-                writer = csv.DictWriter(wrapper, fieldnames=headers)
+        if needs_recompress:
+            backup = gz_path.with_suffix(".csv.gz.bak")
+            if not backup.exists():
+                import shutil
+                shutil.copy2(gz_path, backup)
+            with gzip.open(gz_path, mode="wb", compresslevel=6) as f_out:
+                with io.TextIOWrapper(f_out, encoding="utf-8") as wrapper:
+                    writer = csv.DictWriter(wrapper, fieldnames=headers)
+                    writer.writeheader()
+                    writer.writerows(rows)
+        else:
+            # Plain .csv — write back in place, keeping the format the nightly
+            # archiver expects. Gzipping here would hide the current day from
+            # the archiver and from anything else reading live logs.
+            backup = gz_path.with_suffix(".csv.bak")
+            if not backup.exists():
+                import shutil
+                shutil.copy2(gz_path, backup)
+            with open(gz_path, mode="w", encoding="utf-8", newline="") as f_out:
+                writer = csv.DictWriter(f_out, fieldnames=headers)
                 writer.writeheader()
                 writer.writerows(rows)
         print(f"  ✅ {gz_path.name}: {stats['enriched']} enriched, {stats['already_set']} set, {stats['no_rate']} unmatched")
@@ -259,7 +292,9 @@ def main():
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
     log_dir = Path.home() / ".hermes" / "token_logs"
-    log_files = sorted(log_dir.glob("*.csv.gz"))
+    # Match both plain .csv (the current day, not yet archived) and .csv.gz.
+    # Globbing only *.csv.gz made the enricher blind to today.
+    log_files = sorted(set(log_dir.glob("*.csv.gz")) | set(log_dir.glob("*.csv")))
 
     if not log_files:
         print("No log files found!")

@@ -13,6 +13,14 @@ import sys
 logger = logging.getLogger(__name__)
 
 
+# Single source of truth for supported providers. The dispatcher, /models and
+# the slash-command hints previously each carried their own copy, which drifted.
+PROVIDERS: tuple[str, ...] = (
+    "deepseek", "openrouter", "nous", "nvidia", "groq",
+    "fireworks", "together", "mistral", "cohere", "minimax",
+)
+
+
 # ── Gateway slash commands ──────────────────────────────────────────────
 
 def _register_commands() -> None:
@@ -25,13 +33,13 @@ def _register_commands() -> None:
                 "pricing",
                 "Fetch live model pricing from a provider",
                 "Info",
-                args_hint="[deepseek|openrouter|groq|fireworks|together|mistral|cohere|minimax|all]",
+                args_hint="[" + "|".join(PROVIDERS) + "|all]",
             ),
             CommandDef(
                 "models",
                 "List available models from a provider",
                 "Info",
-                args_hint="[openrouter|nvidia|groq|together|deepseek]",
+                args_hint="[" + "|".join(PROVIDERS) + "]",
             ),
         ])
         logger.info("pricing-tools commands registered")
@@ -47,12 +55,10 @@ def _fetch_pricing_impl(provider: str = "all", **_kw) -> str:
 
     provider = provider.strip().lower() or "all"
 
-    if provider not in ("all", "deepseek", "openrouter", "nvidia", "groq",
-                         "fireworks", "together", "mistral", "cohere", "minimax"):
+    if provider != "all" and provider not in PROVIDERS:
         return (
             f"Unknown provider: '{provider}'.\n"
-            f"Available providers: `deepseek`, `openrouter`, `nvidia`, `groq`, "
-            f"`fireworks`, `together`, `mistral`, `cohere`, `minimax`, `all`."
+            f"Available providers: `{'`, `'.join(PROVIDERS)}`, `all`."
         )
 
     if provider == "all":
@@ -72,10 +78,8 @@ def _list_models_impl(provider: str = "openrouter", model_filter: str = "", **_k
     provider = provider.strip().lower() or "openrouter"
     model_filter = (model_filter or "").strip().lower()
 
-    known = {"deepseek", "openrouter", "nvidia", "groq", "fireworks",
-             "together", "mistral", "cohere", "minimax"}
-    if provider not in known:
-        return f"Unknown provider '{provider}'. Try: `{'`, `'.join(sorted(known))}`."
+    if provider not in PROVIDERS:
+        return f"Unknown provider '{provider}'. Try: `{'`, `'.join(PROVIDERS)}`."
 
     try:
         models = _load_provider(provider)

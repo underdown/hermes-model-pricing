@@ -124,8 +124,65 @@ def _drain_table(html: str, price_cols: list[int] = None) -> list[list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Nous Portal serves embedding/audio models alongside LLMs. Their prices are
+# per-unit, not per-token, so including them would corrupt the per-1M scaling.
+_NOUS_NON_LLM_PREFIXES = frozenset({
+    "voyageai", "sentence-transformers", "amazon", "cohere-embed",
+})
+
+
 # Live scrapers
 # ---------------------------------------------------------------------------
+
+def _live_nous() -> list[ModelPrice]:
+    """Nous Portal — 425 models with direct vendor pricing, no API key.
+
+    The only unauthenticated source carrying first-party prices for the majors
+    whose own /models endpoints return 401/403 (openai, anthropic, google, x-ai).
+    Also the richest source for cache pricing: input_cache_read on 291/425 models
+    vs 0 in the openrouter feed.
+
+    Prices are per-token; the rest of the module stores per-1M, so scale by 1e6.
+    """
+    resp = requests.get("https://inference-api.nousresearch.com/v1/models",
+                        timeout=TIMEOUT, headers={**UA, "Accept": "application/json"})
+    resp.raise_for_status()
+
+    def per_million(pricing: dict, key: str) -> Optional[Decimal]:
+        raw = pricing.get(key)
+        if not raw:
+            return None
+        try:
+            # Quantise to 6dp: per-token x 1e6 leaves float tails like
+            # 0.19999999999999998 that would otherwise poison the cache.
+            return (Decimal(str(raw)) * 1_000_000).quantize(Decimal("0.000001"))
+        except (TypeError, ValueError, ArithmeticError):
+            return None
+
+    out: list[ModelPrice] = []
+    for m in resp.json().get("data", []):
+        pricing = m.get("pricing") or {}
+        if not pricing:
+            continue
+        model_id = m.get("id")
+        if not model_id:
+            continue
+        # Skip embedding/audio models — per-unit pricing has different semantics
+        # and would be misread as per-token.
+        if model_id.split("/")[0] in _NOUS_NON_LLM_PREFIXES:
+            continue
+        out.append(ModelPrice(
+            provider="nous",
+            model_id=model_id,
+            input_cost=per_million(pricing, "prompt"),
+            output_cost=per_million(pricing, "completion"),
+            cache_read_cost=per_million(pricing, "input_cache_read"),
+            cache_write_cost=per_million(pricing, "input_cache_write"),
+            context_length=m.get("context_length"),
+            source_url=resp.url,
+        ))
+    return out
+
 
 def _live_deepseek() -> list[ModelPrice]:
     """Scrape DeepSeek pricing page. Table format:
@@ -414,6 +471,7 @@ _PROVIDER_LIVE_FETCHERS: dict[str, callable] = {
     "mistral":    _live_mistral,
     "cohere":     _live_cohere,
     "minimax":    _live_minimax,
+    "nous":       _live_nous,
 }
 
 
@@ -453,9 +511,24 @@ def get_pricing_entry(provider: str, model_id: str) -> Optional[dict]:
 
     Intended for cross-plugin use (e.g. token-logger enriching cost data for
     providers not covered by usage_pricing.py's hardcoded table).
+
+    Provider names may carry a routing prefix ("custom:openrouter", "openrouter:free").
+    Strip it so the lookup hits the real provider key. Callers pass the provider
+    string as logged, which is not always the bare provider name.
     """
     try:
-        models = _load_provider(provider)
+        providers = [provider]
+        if ":" in provider:
+            base = provider.split(":", 1)[1]
+            if base and base not in providers:
+                providers.append(base)
+
+        models = []
+        for name in providers:
+            found = _load_provider(name)
+            if found:
+                models = found
+                break
     except Exception:
         return None
     for m in models:

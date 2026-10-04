@@ -1,5 +1,5 @@
 name: pricing-tools
-version: "1.1.0"
+version: "1.2.0"
 description: "Fetch live model pricing, enrich token logs with real costs, compare models across providers — surfaced as slash commands on Discord, Telegram, and other gateways."
 author: underdown
 provides_tools:
